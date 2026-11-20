@@ -137,6 +137,9 @@
 #define VPIN_MOSQ_OVERRIDE    V8
 #define VPIN_PREDICTION       V9
 
+// Offline Blynk alert queue depth (fixed, no heap)
+#define ALERT_QUEUE_SIZE     8
+
 // Adaptive sampling intervals (ms)
 #define SAMPLE_INTERVAL_NORMAL    5000
 #define SAMPLE_INTERVAL_MILD      2000
@@ -383,6 +386,16 @@ int             g_mosq_override     = -1;
 
 // State change notification flag
 bool            g_state_changed    = false;
+
+// Offline Blynk alert queue — alerts raised while disconnected are replayed
+struct PendingAlert {
+    char code[24];
+    char msg[96];
+    bool used;
+};
+PendingAlert    g_alert_queue[ALERT_QUEUE_SIZE];
+uint8_t         g_alert_head = 0;
+void            flushAlertQueue();  // used by the WiFi reconnect path
 
 // Sensor health
 SensorHealth    g_health_mpu       = SENSOR_OK;
@@ -1584,6 +1597,7 @@ void wifiDutyCycleUpdate(unsigned long now) {
             if (g_wifi_connected) {
                 Blynk.config(BLYNK_AUTH_TOKEN);
                 Blynk.connect(5000);
+                flushAlertQueue();
             }
         }
         return;
@@ -1603,6 +1617,7 @@ void wifiDutyCycleUpdate(unsigned long now) {
         if (g_wifi_connected) {
             Blynk.config(BLYNK_AUTH_TOKEN);
             Blynk.connect(5000);
+            flushAlertQueue();
         }
     }
 }
@@ -1611,8 +1626,37 @@ void wifiDutyCycleUpdate(unsigned long now) {
 // BLYNK
 // =============================================================================
 
+// Store an event alert for later delivery. When the queue is full the oldest
+// slot is overwritten so a new alert is never silently dropped.
+void queueAlert(const char* code, const char* msg) {
+    uint8_t slot = ALERT_QUEUE_SIZE;
+    for (uint8_t i = 0; i < ALERT_QUEUE_SIZE; i++) {
+        if (!g_alert_queue[i].used) { slot = i; break; }
+    }
+    if (slot == ALERT_QUEUE_SIZE) {
+        slot = g_alert_head;
+        g_alert_head = (g_alert_head + 1) % ALERT_QUEUE_SIZE;
+    }
+    snprintf(g_alert_queue[slot].code, sizeof(g_alert_queue[slot].code),
+             "%s", code);
+    snprintf(g_alert_queue[slot].msg, sizeof(g_alert_queue[slot].msg),
+             "%s", msg);
+    g_alert_queue[slot].used = true;
+}
+
+void flushAlertQueue() {
+    if (!g_wifi_connected) return;
+    for (uint8_t i = 0; i < ALERT_QUEUE_SIZE; i++) {
+        if (!g_alert_queue[i].used) continue;
+        Blynk.logEvent(g_alert_queue[i].code, g_alert_queue[i].msg);
+        g_alert_queue[i].used = false;
+    }
+}
+
 void blynkUpdate() {
     if (!g_wifi_connected) return;
+
+    flushAlertQueue();
 
     Blynk.virtualWrite(VPIN_DI_SCORE, g_fusion.di_smooth);
     Blynk.virtualWrite(VPIN_STATE, (int)g_state);
@@ -1635,14 +1679,14 @@ void blynkUpdate() {
             char msg[80];
             snprintf(msg, sizeof(msg), "Baby uncomfortable — %s (conf: %.0f%%)",
                      reason, g_fusion_confidence * 100.0f);
-            Blynk.logEvent("high_discomfort", msg);
+            queueAlert("high_discomfort", msg);
         } else if (g_state == STATE_CRITICAL) {
             char msg[80];
             snprintf(msg, sizeof(msg), "CRITICAL: Immediate attention! Sev:%.0f Ep:%u",
                      g_severity, g_events.cry_episodes);
-            Blynk.logEvent("critical_alert", msg);
+            queueAlert("critical_alert", msg);
         } else if (g_state == STATE_NORMAL) {
-            Blynk.logEvent("recovered", "Baby returned to normal state");
+            queueAlert("recovered", "Baby returned to normal state");
         }
     }
 
@@ -1652,12 +1696,12 @@ void blynkUpdate() {
 
     if (g_state == STATE_NORMAL && g_fusion.slope > SLOPE_WARNING_THRESH) {
         if (millis() - lastTrendWarning >= 300000UL) {
-            Blynk.logEvent("trend_warning", "Rising discomfort trend detected");
+            queueAlert("trend_warning", "Rising discomfort trend detected");
             lastTrendWarning = millis();
         }
     } else if (g_state == STATE_MILD_DISCOMFORT && g_fusion.slope > SLOPE_CRITICAL_THRESH) {
         if (millis() - lastRapidEscalation >= 300000UL) {
-            Blynk.logEvent("rapid_escalation", "Rapid escalation — intervention may be needed");
+            queueAlert("rapid_escalation", "Rapid escalation — intervention may be needed");
             lastRapidEscalation = millis();
         }
     }
@@ -1695,12 +1739,12 @@ void systemHealthCheck() {
         setRelay(PIN_RELAY_FAN, false);
         setRelay(PIN_RELAY_MOSQUITO, false);
         if (g_wifi_connected) {
-            Blynk.logEvent("system_fault", "SYSTEM FAULT: Multiple sensor failures!");
+            queueAlert("system_fault", "SYSTEM FAULT: Multiple sensor failures!");
         }
     } else if (failed >= 2) {
         Serial.println("[HEALTH] WARNING: 2 sensors failed — degraded mode");
         if (g_wifi_connected) {
-            Blynk.logEvent("degraded_mode", "System degraded — 2 sensors offline");
+            queueAlert("degraded_mode", "System degraded — 2 sensors offline");
         }
     }
 }
@@ -1938,6 +1982,7 @@ void loop() {
         if (g_wifi_connected) {
             Blynk.config(BLYNK_AUTH_TOKEN);
             Blynk.connect(5000);
+            flushAlertQueue();
         }
     }
 

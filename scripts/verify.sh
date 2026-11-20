@@ -62,6 +62,39 @@ check_light_sleep() {
   fi
 }
 
+# --- Task 4: offline alert queue ---------------------------------------------
+check_alert_queue() {
+  need '#define ALERT_QUEUE_SIZE[[:space:]]+8' "$SKETCH" \
+    "ALERT_QUEUE_SIZE is 8"
+  need 'struct PendingAlert' "$SKETCH" "PendingAlert struct exists"
+  need 'void queueAlert\(' "$SKETCH" "queueAlert exists"
+  need 'void flushAlertQueue\(' "$SKETCH" "flushAlertQueue exists"
+
+  local blynk_body flush_body wifi_body total inside
+  blynk_body="$(awk '/^void blynkUpdate\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  if printf '%s' "$blynk_body" | grep -q 'flushAlertQueue()'; then
+    pass "blynkUpdate flushes the queue"
+  else
+    fail "blynkUpdate flushes the queue"
+  fi
+
+  flush_body="$(awk '/^void flushAlertQueue\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  total=$(grep -c 'Blynk\.logEvent(' "$SKETCH")
+  inside=$(printf '%s' "$flush_body" | grep -c 'Blynk\.logEvent(')
+  if [ "$total" -eq "$inside" ] && [ "$inside" -ge 1 ]; then
+    pass "all Blynk.logEvent calls go through the queue"
+  else
+    fail "all Blynk.logEvent calls go through the queue (total=$total, in flush=$inside)"
+  fi
+
+  wifi_body="$(awk '/^void wifiDutyCycleUpdate\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  if printf '%s' "$wifi_body" | grep -q 'flushAlertQueue()'; then
+    pass "WiFi reconnect flushes the queue"
+  else
+    fail "WiFi reconnect flushes the queue"
+  fi
+}
+
 # --- Compile gate -------------------------------------------------------------
 check_compile() {
   local tmp log
@@ -84,6 +117,7 @@ check_compile() {
 check_no_secrets
 check_wifi_duty_cycle
 check_light_sleep
+check_alert_queue
 check_compile
 
 if [ "$FAILED" -ne 0 ]; then
