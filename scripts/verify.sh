@@ -147,6 +147,34 @@ check_repo_docs() {
   rm -rf "$tmp"
 }
 
+# --- Final review: cloud-aware alerting and override sync --------------------
+check_review_fixes() {
+  local flush_body connected_body
+  flush_body="$(awk '/^void flushAlertQueue\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  if printf '%s' "$flush_body" | grep -q 'Blynk\.connected()'; then
+    pass "flushAlertQueue requires a live Blynk cloud link"
+  else
+    fail "flushAlertQueue requires a live Blynk cloud link"
+  fi
+
+  connected_body="$(awk '/^BLYNK_CONNECTED\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  if [ -n "$connected_body" ]; then
+    pass "BLYNK_CONNECTED callback exists"
+  else
+    fail "BLYNK_CONNECTED callback exists"
+  fi
+  if printf '%s' "$connected_body" | grep -q 'Blynk\.syncVirtual'; then
+    pass "reconnect syncs manual override pins"
+  else
+    fail "reconnect syncs manual override pins"
+  fi
+  if printf '%s' "$connected_body" | grep -q 'flushAlertQueue()'; then
+    pass "reconnect flushes queued alerts once cloud is live"
+  else
+    fail "reconnect flushes queued alerts once cloud is live"
+  fi
+}
+
 # --- Compile gate -------------------------------------------------------------
 check_compile() {
   local tmp log
@@ -172,6 +200,7 @@ check_light_sleep
 check_alert_queue
 check_safe_halt
 check_repo_docs
+check_review_fixes
 check_compile
 
 if [ "$FAILED" -ne 0 ]; then

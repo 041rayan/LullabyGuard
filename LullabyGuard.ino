@@ -1663,7 +1663,9 @@ void queueAlert(const char* code, const char* msg) {
 }
 
 void flushAlertQueue() {
-    if (!g_wifi_connected) return;
+    // WiFi up does not mean the Blynk cloud is reachable — keep alerts queued
+    // until a real cloud connection exists (design §I.2).
+    if (!g_wifi_connected || !Blynk.connected()) return;
     for (uint8_t i = 0; i < ALERT_QUEUE_SIZE; i++) {
         if (!g_alert_queue[i].used) continue;
         Blynk.logEvent(g_alert_queue[i].code, g_alert_queue[i].msg);
@@ -1734,6 +1736,13 @@ BLYNK_WRITE(VPIN_FAN_OVERRIDE) {
 BLYNK_WRITE(VPIN_MOSQ_OVERRIDE) {
     g_mosq_override = param.asInt() - 1;
     Serial.printf("[BLYNK] Mosquito override: %d\n", g_mosq_override);
+}
+
+// The cloud link can come up after the WiFi link, and controls set while the
+// radio was off would otherwise never reach the device.
+BLYNK_CONNECTED() {
+    Blynk.syncVirtual(VPIN_FAN_OVERRIDE, VPIN_MOSQ_OVERRIDE);
+    flushAlertQueue();
 }
 
 // =============================================================================
