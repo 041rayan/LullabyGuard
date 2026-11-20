@@ -1,0 +1,18 @@
+# Local credentials — never commit
+secrets.h
+
+# Arduino / build output
+build/
+*.bin
+*.elf
+*.hex
+*.map
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Superpowers plan scratch space
+.superpowers/sdd/
