@@ -122,6 +122,31 @@ check_safe_halt() {
   need 'queueAlert\("system_recovered"' "$SKETCH" "recovery from SAFE_HALT is announced"
 }
 
+# --- Task 6: repository artifacts --------------------------------------------
+check_repo_docs() {
+  local f
+  for f in README.md LICENSE sketch.yaml secrets.example.h LullabyGuard_SystemDesign.md; do
+    if [ -f "$ROOT/$f" ]; then
+      pass "$f exists"
+    else
+      fail "$f exists"
+    fi
+  done
+
+  local tmp log
+  tmp="$(mktemp -d /tmp/opencode/lg-profile.XXXXXX)"
+  mkdir -p "$tmp/LullabyGuard"
+  cp "$SKETCH" "$ROOT/secrets.h" "$ROOT/sketch.yaml" "$tmp/LullabyGuard/"
+  log="$tmp/profile.log"
+  if (cd "$tmp" && arduino-cli compile --profile default LullabyGuard) >"$log" 2>&1; then
+    pass "arduino-cli compile --profile default"
+  else
+    fail "arduino-cli compile --profile default"
+    tail -n 20 "$log"
+  fi
+  rm -rf "$tmp"
+}
+
 # --- Compile gate -------------------------------------------------------------
 check_compile() {
   local tmp log
@@ -146,6 +171,7 @@ check_wifi_duty_cycle
 check_light_sleep
 check_alert_queue
 check_safe_halt
+check_repo_docs
 check_compile
 
 if [ "$FAILED" -ne 0 ]; then

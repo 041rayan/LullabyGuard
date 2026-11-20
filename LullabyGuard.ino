@@ -12,6 +12,9 @@
 //
 // Architecture: Edge-only inference, weighted fusion, state machine
 // Target: ESP32-S3 (Arduino framework)
+//
+// Full algorithm spec: docs/superpowers/specs/ and LullabyGuard_SystemDesign.md
+// Before building: copy secrets.example.h to secrets.h and fill in your own values.
 // =============================================================================
 
 #define BLYNK_TEMPLATE_ID   "TMPL66yk5T8ys"
