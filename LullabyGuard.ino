@@ -379,6 +379,7 @@ bool            g_mosquito_relay_on = false;
 bool            g_fan_relay_on      = false;
 unsigned long   g_fan_last_toggle   = 0;
 unsigned long   g_mosq_last_toggle  = 0;
+bool            g_safe_halt         = false;  // Latched: all relays forced OFF
 
 // Manual overrides from Blynk
 int             g_fan_override      = -1;  // -1=auto, 0=off, 1=on
@@ -1398,6 +1399,13 @@ void updateAdaptiveSampling() {
 // =============================================================================
 
 void controlFanRelay() {
+    // SAFE_HALT wins over everything, including manual override
+    if (g_safe_halt) {
+        setRelay(PIN_RELAY_FAN, false);
+        g_fan_relay_on = false;
+        return;
+    }
+
     // Manual override check
     if (g_fan_override == 0) {
         setRelay(PIN_RELAY_FAN, false);
@@ -1447,6 +1455,13 @@ void controlFanRelay() {
 }
 
 void controlMosquitoRelay() {
+    // SAFE_HALT wins over everything, including manual override
+    if (g_safe_halt) {
+        setRelay(PIN_RELAY_MOSQUITO, false);
+        g_mosquito_relay_on = false;
+        return;
+    }
+
     // Manual override
     if (g_mosq_override == 0) {
         setRelay(PIN_RELAY_MOSQUITO, false);
@@ -1732,19 +1747,32 @@ uint8_t countFailedSensors() {
 
 void systemHealthCheck() {
     uint8_t failed = countFailedSensors();
+    static bool degraded_reported = false;
 
     if (failed >= 3) {
-        // SAFE HALT: too many sensors failed
-        Serial.println("[HEALTH] CRITICAL: 3+ sensors failed — SAFE HALT");
-        setRelay(PIN_RELAY_FAN, false);
-        setRelay(PIN_RELAY_MOSQUITO, false);
-        if (g_wifi_connected) {
+        // SAFE HALT: latch until at least two sensors recover
+        if (!g_safe_halt) {
+            g_safe_halt = true;
             queueAlert("system_fault", "SYSTEM FAULT: Multiple sensor failures!");
         }
+        Serial.println("[HEALTH] CRITICAL: 3+ sensors failed — SAFE HALT (latched)");
+        setRelay(PIN_RELAY_FAN, false);
+        setRelay(PIN_RELAY_MOSQUITO, false);
+        g_fan_relay_on = false;
+        g_mosquito_relay_on = false;
     } else if (failed >= 2) {
-        Serial.println("[HEALTH] WARNING: 2 sensors failed — degraded mode");
-        if (g_wifi_connected) {
+        if (!degraded_reported) {
+            Serial.println("[HEALTH] WARNING: 2 sensors failed — degraded mode");
             queueAlert("degraded_mode", "System degraded — 2 sensors offline");
+            degraded_reported = true;
+        }
+    } else {
+        degraded_reported = false;
+        if (g_safe_halt) {
+            // Hysteresis: recover only when fewer than two sensors are failed
+            g_safe_halt = false;
+            queueAlert("system_recovered", "System recovered — SAFE HALT cleared");
+            Serial.println("[HEALTH] Sensors recovered — SAFE HALT cleared");
         }
     }
 }

@@ -95,6 +95,33 @@ check_alert_queue() {
   fi
 }
 
+# --- Task 5: latched SAFE_HALT ------------------------------------------------
+check_safe_halt() {
+  need 'bool[[:space:]]+g_safe_halt[[:space:]]*=[[:space:]]*false' "$SKETCH" \
+    "g_safe_halt is declared false"
+
+  local fan_body mosq_body fan_halt fan_override mosq_halt mosq_override
+  fan_body="$(awk '/^void controlFanRelay\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  mosq_body="$(awk '/^void controlMosquitoRelay\(/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  fan_halt=$(printf '%s' "$fan_body" | grep -n 'g_safe_halt' | head -1 | cut -d: -f1)
+  fan_override=$(printf '%s' "$fan_body" | grep -n 'g_fan_override' | head -1 | cut -d: -f1)
+  mosq_halt=$(printf '%s' "$mosq_body" | grep -n 'g_safe_halt' | head -1 | cut -d: -f1)
+  mosq_override=$(printf '%s' "$mosq_body" | grep -n 'g_mosq_override' | head -1 | cut -d: -f1)
+
+  if [ -n "$fan_halt" ] && [ -n "$fan_override" ] && [ "$fan_halt" -lt "$fan_override" ]; then
+    pass "fan relay checks SAFE_HALT before manual override"
+  else
+    fail "fan relay checks SAFE_HALT before manual override"
+  fi
+  if [ -n "$mosq_halt" ] && [ -n "$mosq_override" ] && [ "$mosq_halt" -lt "$mosq_override" ]; then
+    pass "mosquito relay checks SAFE_HALT before manual override"
+  else
+    fail "mosquito relay checks SAFE_HALT before manual override"
+  fi
+  need 'g_safe_halt[[:space:]]*=[[:space:]]*true' "$SKETCH" "SAFE_HALT is latched on failure"
+  need 'queueAlert\("system_recovered"' "$SKETCH" "recovery from SAFE_HALT is announced"
+}
+
 # --- Compile gate -------------------------------------------------------------
 check_compile() {
   local tmp log
@@ -118,6 +145,7 @@ check_no_secrets
 check_wifi_duty_cycle
 check_light_sleep
 check_alert_queue
+check_safe_halt
 check_compile
 
 if [ "$FAILED" -ne 0 ]; then
