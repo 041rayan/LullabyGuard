@@ -46,6 +46,22 @@ check_wifi_duty_cycle() {
   fi
 }
 
+# --- Task 3: light sleep ------------------------------------------------------
+check_light_sleep() {
+  need '#define ENABLE_LIGHT_SLEEP[[:space:]]+1' "$SKETCH" \
+    "ENABLE_LIGHT_SLEEP is 1"
+  need 'esp_sleep_enable_timer_wakeup' "$SKETCH" "timer wakeup is armed"
+  need 'esp_light_sleep_start' "$SKETCH" "light sleep is entered"
+  need 'enterLightSleepIfIdle\(now\)' "$SKETCH" "loop calls enterLightSleepIfIdle(now)"
+  local body
+  body="$(awk '/void enterLightSleepIfIdle/{f=1} f{print} f && /^}/{exit}' "$SKETCH")"
+  if printf '%s' "$body" | grep -q 'g_sample_interval'; then
+    pass "sleep duration is bounded by g_sample_interval"
+  else
+    fail "sleep duration is bounded by g_sample_interval"
+  fi
+}
+
 # --- Compile gate -------------------------------------------------------------
 check_compile() {
   local tmp log
@@ -67,6 +83,7 @@ check_compile() {
 
 check_no_secrets
 check_wifi_duty_cycle
+check_light_sleep
 check_compile
 
 if [ "$FAILED" -ne 0 ]; then

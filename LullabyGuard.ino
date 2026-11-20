@@ -157,6 +157,9 @@
 #define WIFI_WINDOW_ACTIVE_MS 30000UL   // NORMAL: connected 30 s per cycle
 #define WIFI_WINDOW_CYCLE_MS  300000UL  // NORMAL: 5 min duty-cycle period
 
+// Power: light sleep between samples in NORMAL state (set 0 to disable)
+#define ENABLE_LIGHT_SLEEP    1
+
 // =============================================================================
 // EVENT-DRIVEN FUSION CONSTANTS (v2 upgrade)
 // =============================================================================
@@ -1830,6 +1833,32 @@ void setup() {
     Serial.println("\n[SYS] === SYSTEM READY — Monitoring Active ===\n");
 }
 
+// Conservative light sleep between sensor reads (design §G.3). Only entered in
+// NORMAL state while the WiFi radio is off, and never past a scheduled deadline.
+void enterLightSleepIfIdle(unsigned long now) {
+#if ENABLE_LIGHT_SLEEP
+    if (g_state != STATE_NORMAL || g_wifi_connected) return;
+    if (now - g_last_api_poll >= API_POLL_INTERVAL_MS) return;
+    if (now - g_last_blynk_update >= g_blynk_interval) return;
+    if (now - g_last_sensor_read >= g_sample_interval) return;
+
+    unsigned long sleep_ms = g_sample_interval - (now - g_last_sensor_read);
+
+    if (!g_wifi_window_on) {
+        if (now - g_wifi_window_started >= WIFI_WINDOW_CYCLE_MS) return;
+        unsigned long until_wifi =
+            WIFI_WINDOW_CYCLE_MS - (now - g_wifi_window_started);
+        if (until_wifi < sleep_ms) sleep_ms = until_wifi;
+    }
+
+    if (sleep_ms < 50) return;  // Not worth the transition
+    esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
+    esp_light_sleep_start();
+#else
+    (void)now;
+#endif
+}
+
 // =============================================================================
 // MAIN LOOP
 // =============================================================================
@@ -1911,4 +1940,7 @@ void loop() {
             Blynk.connect(5000);
         }
     }
+
+    // ═══ Power: light sleep in NORMAL while the radio is off ═══
+    enterLightSleepIfIdle(now);
 }
