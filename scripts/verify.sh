@@ -30,6 +30,22 @@ check_no_secrets() {
   fi
 }
 
+# --- Task 2: WiFi duty-cycling ------------------------------------------------
+check_wifi_duty_cycle() {
+  need '#define WIFI_WINDOW_ACTIVE_MS[[:space:]]+30000UL' "$SKETCH" \
+    "WIFI_WINDOW_ACTIVE_MS is 30000"
+  need '#define WIFI_WINDOW_CYCLE_MS[[:space:]]+300000UL' "$SKETCH" \
+    "WIFI_WINDOW_CYCLE_MS is 300000"
+  need 'wifiDutyCycleUpdate\(now\)' "$SKETCH" "loop calls wifiDutyCycleUpdate(now)"
+  local block
+  block="$(awk '/WiFi reconnection check/{f=1} f' "$SKETCH")"
+  if printf '%s' "$block" | grep -q 'g_wifi_window_on'; then
+    pass "reconnect block is gated by g_wifi_window_on"
+  else
+    fail "reconnect block is gated by g_wifi_window_on"
+  fi
+}
+
 # --- Compile gate -------------------------------------------------------------
 check_compile() {
   local tmp log
@@ -50,6 +66,7 @@ check_compile() {
 }
 
 check_no_secrets
+check_wifi_duty_cycle
 check_compile
 
 if [ "$FAILED" -ne 0 ]; then

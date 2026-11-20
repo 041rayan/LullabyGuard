@@ -154,6 +154,8 @@
 // WiFi
 #define WIFI_RETRY_MAX        5
 #define WIFI_BACKOFF_MS       300000UL  // 5 min
+#define WIFI_WINDOW_ACTIVE_MS 30000UL   // NORMAL: connected 30 s per cycle
+#define WIFI_WINDOW_CYCLE_MS  300000UL  // NORMAL: 5 min duty-cycle period
 
 // =============================================================================
 // EVENT-DRIVEN FUSION CONSTANTS (v2 upgrade)
@@ -390,6 +392,8 @@ uint8_t         g_sound_fail_count = 0;
 // WiFi state
 bool            g_wifi_connected   = false;
 uint8_t         g_wifi_retries     = 0;
+bool            g_wifi_window_on   = true;   // NORMAL-state duty-cycle window
+unsigned long   g_wifi_window_started = 0;
 
 // Sound sustained detection
 unsigned long   g_sound_high_start = 0;
@@ -1564,6 +1568,42 @@ void wifiConnect() {
     }
 }
 
+// Duty-cycle the radio in NORMAL state (design §G.2). MILD/HIGH/CRITICAL stay
+// connected so alerts and manual overrides are never delayed.
+void wifiDutyCycleUpdate(unsigned long now) {
+    if (g_state != STATE_NORMAL) {
+        if (!g_wifi_window_on) {
+            g_wifi_window_on = true;
+            g_wifi_window_started = now;
+        }
+        if (!g_wifi_connected) {
+            wifiConnect();
+            if (g_wifi_connected) {
+                Blynk.config(BLYNK_AUTH_TOKEN);
+                Blynk.connect(5000);
+            }
+        }
+        return;
+    }
+
+    if (g_wifi_window_on) {
+        if (now - g_wifi_window_started >= WIFI_WINDOW_ACTIVE_MS) {
+            WiFi.mode(WIFI_OFF);
+            g_wifi_connected = false;
+            g_wifi_window_on = false;
+            Serial.println("[WIFI] NORMAL duty cycle — radio off");
+        }
+    } else if (now - g_wifi_window_started >= WIFI_WINDOW_CYCLE_MS) {
+        g_wifi_window_on = true;
+        g_wifi_window_started = now;
+        wifiConnect();
+        if (g_wifi_connected) {
+            Blynk.config(BLYNK_AUTH_TOKEN);
+            Blynk.connect(5000);
+        }
+    }
+}
+
 // =============================================================================
 // BLYNK
 // =============================================================================
@@ -1758,6 +1798,8 @@ void setup() {
         Blynk.connect(5000);
         Serial.println("[BLYNK] Connected");
     }
+    g_wifi_window_on = true;
+    g_wifi_window_started = millis();
 
     // --- Initialize state ---
     g_state = STATE_NORMAL;
@@ -1794,6 +1836,10 @@ void setup() {
 
 void loop() {
     unsigned long now = millis();
+
+    // ═══ WiFi duty cycle (blocking reconnect may advance the clock) ═══
+    wifiDutyCycleUpdate(now);
+    now = millis();
 
     // ═══ TASK 1: Sensor Reading + Processing (adaptive interval) ═══
     if (now - g_last_sensor_read >= g_sample_interval) {
@@ -1857,8 +1903,8 @@ void loop() {
         Blynk.run();
     }
 
-    // ═══ WiFi reconnection check ═══
-    if (!g_wifi_connected && now - g_last_wifi_attempt >= 60000) {
+    // ═══ WiFi reconnection check (only inside an active duty-cycle window) ═══
+    if (!g_wifi_connected && g_wifi_window_on && now - g_last_wifi_attempt >= 60000) {
         wifiConnect();
         if (g_wifi_connected) {
             Blynk.config(BLYNK_AUTH_TOKEN);
